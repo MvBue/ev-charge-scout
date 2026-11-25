@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EV Charge Scout</title>
+<meta name="theme-color" content="#17201B">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --bg:#F3F4F0; --surface:#FFFFFF; --sunk:#E8EAE3; --line:#D5D8CE; --fg:#17201B; --muted:#5D665F;
+  --accent:#8C6400; --accent-strong:#D9A40F; --accent-bg:#FBF1D4;
+  --avail:#1E7A47; --avail-bg:#DDF0E3; --taken-bg:#E6E8E2; --busy:#C2532B;
+  --k1:#8A948C; --k2:#2F6FB2; --k3:#2E8B57; --k4:#8A4FB8;
+  --display:"Saira Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111613; --surface:#18201B; --sunk:#202923; --line:#303A33; --fg:#E6EAE4; --muted:#9AA59D;
+  --accent:#E8B92E; --accent-strong:#E8B92E; --accent-bg:#3A3015;
+  --avail:#6FD39A; --avail-bg:#183526; --taken-bg:#252D28; --busy:#F08A5D;
+  --k1:#9AA59D; --k2:#6EA6E6; --k3:#5FC98D; --k4:#B88AE6; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111613; --surface:#18201B; --sunk:#202923; --line:#303A33; --fg:#E6EAE4; --muted:#9AA59D;
+  --accent:#E8B92E; --accent-strong:#E8B92E; --accent-bg:#3A3015;
+  --avail:#6FD39A; --avail-bg:#183526; --taken-bg:#252D28; --busy:#F08A5D;
+  --k1:#9AA59D; --k2:#6EA6E6; --k3:#5FC98D; --k4:#B88AE6; color-scheme:dark}
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.45}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:18px 40px;display:flex;flex-direction:column;gap:14px}
+h1,h2{font-family:var(--display);font-weight:700;letter-spacing:.01em;margin:0;text-wrap:balance}
+h1{font-size:30px;line-height:1}
+h2{font-size:20px}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;border-bottom:3px solid var(--accent-strong);padding-bottom:10px}
+.meta{color:var(--muted);font-size:13px}
+.banner{background:var(--accent-bg);border:1px solid var(--accent);color:var(--fg);padding:8px 12px;border-radius:6px;font-size:13px}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
+button,select,input{font:inherit;color:var(--fg)}
+.btn{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:#1B1606;font-weight:600}
+.btn:focus-visible,select:focus-visible,.chip:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+select{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 11px;cursor:pointer;font-size:13px}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+#map{height:min(58vh,560px);border:1px solid var(--line);border-radius:8px;background:var(--sunk)}
+.leaflet-container{font-family:var(--body)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--surface);color:var(--fg)}
+.leaflet-popup-content{margin:10px 12px;min-width:220px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%}
+.count{color:var(--muted);font-size:13px}
+.list{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+.item{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.item:last-child{border-bottom:none}
+.item:hover{background:var(--sunk)}
+.name{font-weight:600}
+.sub{font-size:12px;color:var(--muted)}
+.dist{font-family:var(--display);font-size:20px;font-weight:700;text-align:right;line-height:1;font-variant-numeric:tabular-nums}
+.facts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pill{display:inline-block;font-size:12px;font-weight:600;border-radius:4px;padding:1px 7px;background:var(--taken-bg);color:var(--fg);font-variant-numeric:tabular-nums}
+.pill.kw{color:#fff}
+.pill.free{background:var(--avail-bg);color:var(--avail)}
+.pill.busy{color:var(--busy)}
+.pill.price{background:var(--accent-bg);color:var(--accent)}
+.pts{display:flex;flex-direction:column;gap:3px;margin:6px 0}
+.pop a{color:var(--accent);font-weight:600}
+.empty{padding:24px;text-align:center;color:var(--muted)}
+.note{font-size:12px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>EV Charge Scout</h1>
+      <div class="meta" id="metaLine">Loading chargers…</div>
+    </div>
+    <button class="btn primary" id="locBtn">Locate me</button>
+  </header>
+  <div class="banner" id="msg" hidden></div>
+
+  <section class="controls" aria-label="Filters">
+    <div class="field"><span class="lbl">Min. power</span><div class="row" id="kwChips"></div></div>
+    <div class="field"><span class="lbl">Current</span><div class="row" id="typeChips"></div></div>
+    <div class="field"><span class="lbl">Plug</span><select id="plug"></select></div>
+    <div class="field"><span class="lbl">Show only</span><div class="row">
+      <button class="chip" id="onlyFree" aria-pressed="false">Free now</button>
+      <button class="chip" id="onlyPrice" aria-pressed="false">Price known</button>
+      <button class="chip" id="onlyPublic" aria-pressed="true">Public</button></div></div>
+  </section>
+
+  <div id="map" role="region" aria-label="Map of charging stations"></div>
+  <div class="legend" id="legend"></div>
+
+  <div class="row" style="justify-content:space-between">
+    <span class="count" id="count"></span>
+    <label class="row"><span class="lbl">Sort</span><select id="sort">
+      <option value="dist">Nearest</option><option value="kw">Fastest</option><option value="price">Cheapest (CHF/kWh)</option></select></label>
+  </div>
+  <div class="list" id="list"></div>
+  <p class="note">Distances are straight-line. Range per 10 min assumes full station power and 18 kWh/100 km; most cars charge slower than the station maximum.
+    Data: <a href="https://ich-tanke-strom.ch" target="_blank" rel="noopener">ich-tanke-strom.ch</a> (Swiss Federal Office of Energy). Prices are known for about a quarter of stations.</p>
+</div>
+
+<script>
+const STATUS_URL = "https://data.geo.admin.ch/ch.bfe.ladestellen-elektromobilitaet/status/oicp/ch.bfe.ladestellen-elektromobilitaet.json";
+const PREF_KEY = "ecs-prefs-v1", LIST_MAX = 40, KWH_PER_KM = 0.18;
+const ls = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const SPEEDS = [
+  {min:0, label:"< 11 kW", var:"--k1"},
+  {min:11, label:"11–49 kW AC", var:"--k2"},
+  {min:50, label:"50–149 kW DC", var:"--k3"},
+  {min:150, label:"150+ kW DC", var:"--k4"},
+];
+const speedOf = kw => SPEEDS.reduce((a, s) => (kw || 0) >= s.min ? s : a, SPEEDS[0]);
+const KW_OPTS = [0, 11, 22, 50, 150];
+const TYPE_OPTS = ["All", "AC", "DC"];
+
+const prefs = Object.assign({minKw:0, type:"All", plug:"", onlyFree:false, onlyPrice:false, onlyPublic:true, sort:"dist"},
+  JSON.parse(ls.get(PREF_KEY) || "{}"));
+const savePrefs = () => ls.set(PREF_KEY, JSON.stringify(prefs));
+
+let stations = [], status = {}, statusAt = null, me = null, fetchedAt = null;
+const map = L.map("map", {preferCanvas:true, zoomControl:true}).setView([46.8, 8.23], 8);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19,
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+let meMarker = null, meCircle = null;
+
+function haversineKm(a, b){
+  const R = 6371, r = x => x * Math.PI / 180;
+  const dLat = r(b.lat - a.lat), dLon = r(b.lon - a.lon);
+  const h = Math.sin(dLat/2)**2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const fmtDist = km => km == null ? "" : km < 1 ? `${Math.round(km*1000/10)*10} m` : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
+const priceKwh = p => { const m = p && p.match(/([\d.]+)\s*CHF\/kWh/); return m ? parseFloat(m[1]) : null; };
+const kmPer10Min = kw => Math.round(kw / 6 / KWH_PER_KM);
+
+function prep(s){
+  s.maxKw = Math.max(0, ...s.points.map(p => p.kw || 0));
+  s.types = new Set(s.points.map(p => p.type));
+  s.plugs = new Set(s.points.map(p => p.plug));
+  s.public = !/restricted|test/i.test(s.access || "");
+  s.kwhPrice = priceKwh(s.price);
+  return s;
+}
+function pointsOk(s){
+  return s.points.filter(p => (p.kw || 0) >= prefs.minKw && (prefs.type === "All" || p.type === prefs.type) && (!prefs.plug || p.plug === prefs.plug));
+}
+const freeCount = ids => ids.filter(i => status[i] === "Available").length;
+const knownCount = ids => ids.filter(i => status[i] && status[i] !== "Unknown" && status[i] !== "EvseNotFound").length;
+
+function visible(){
+  const out = [];
+  for (const s of stations){
+    if (prefs.onlyPublic && !s.public) continue;
+    if (prefs.onlyPrice && !s.price) continue;
+    const pts = pointsOk(s);
+    if (!pts.length) continue;
+    const ids = pts.flatMap(p => p.ids);
+    s.free = freeCount(ids); s.known = knownCount(ids); s.total = ids.length; s.shown = pts;
+    if (prefs.onlyFree && !s.free) continue;
+    s.km = me ? haversineKm(me, s) : null;
+    out.push(s);
+  }
+  return out;
+}
+
+function pointLine(p){
+  const sp = speedOf(p.kw), free = freeCount(p.ids), known = knownCount(p.ids);
+  const avail = known ? `<span class="pill ${free ? "free" : "busy"}">${free}/${p.ids.length} free</span>` : `<span class="pill">${p.ids.length}× status ?</span>`;
+  return `<div class="row"><span class="pill kw" style="background:${css(sp.var)}">${p.kw ? p.kw + " kW" : "? kW"} ${p.type}</span>
+    <span class="pill">${esc(p.plug)}</span>${avail}${p.kw ? `<span class="sub">≈ ${kmPer10Min(p.kw)} km / 10 min</span>` : ""}</div>`;
+}
+function popupHtml(s){
+  const nav = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}`;
+  return `<div class="pop"><div class="name">${esc(s.name || s.addr)}</div>
+    <div class="sub">${esc(s.op)}${s.km != null ? " · " + fmtDist(s.km) : ""}</div>
+    <div class="sub">${esc(s.addr)}</div>
+    <div class="pts">${s.shown.map(pointLine).join("")}</div>
+    <div class="row"><span class="pill ${s.price ? "price" : ""}">${esc(s.price || "Price: ask operator")}</span>
+    <span class="sub">${esc(s.access || "")}${s.open24 ? " · 24 h" : ""}</span></div>
+    <div style="margin-top:6px"><a href="${nav}" target="_blank" rel="noopener">Navigate →</a></div></div>`;
+}
+
+function drawMap(list){
+  layer.clearLayers();
+  for (const s of list){
+    const sp = speedOf(Math.max(...s.shown.map(p => p.kw || 0)));
+    const color = css(sp.var);
+    const m = L.circleMarker([s.lat, s.lon], {radius: sp.min >= 50 ? 7 : 5, color: s.known && !s.free ? css("--busy") : color,
+      weight: 2, fillColor: color, fillOpacity: s.known && !s.free ? .25 : .85});
+    m.bindPopup(() => popupHtml(s));
+    s.marker = m;
+    layer.addLayer(m);
+  }
+}
+
+function drawList(list){
+  const ref = me || {lat: map.getCenter().lat, lon: map.getCenter().lng};
+  for (const s of list) s.sortKm = haversineKm(ref, s);
+  const near = list.slice().sort((a, b) => a.sortKm - b.sortKm).slice(0, LIST_MAX * 3);
+  const by = {
+    dist: (a, b) => a.sortKm - b.sortKm,
+    kw: (a, b) => b.maxKw - a.maxKw || a.sortKm - b.sortKm,
+    price: (a, b) => (a.kwhPrice ?? 1e9) - (b.kwhPrice ?? 1e9) || a.sortKm - b.sortKm,
+  }[prefs.sort];
+  const top = near.sort(by).slice(0, LIST_MAX);
+  $("count").textContent = `${list.length.toLocaleString("de-CH")} stations match · list shows ${top.length} closest to ${me ? "you" : "map centre"}`;
+  $("list").innerHTML = top.length ? top.map((s, i) => `<div class="item" tabindex="0" data-i="${i}">
+      <div><div class="name">${esc(s.name || s.addr)}</div><div class="sub">${esc(s.op)} · ${esc(s.addr)}</div></div>
+      <div class="dist">${fmtDist(s.sortKm)}</div>
+      <div class="facts">${s.shown.map(p => {
+        const sp = speedOf(p.kw);
+        return `<span class="pill kw" style="background:${css(sp.var)}">${p.kw ? p.kw + " kW" : "? kW"} ${p.type} · ${esc(p.plug)}</span>`;}).join("")}
+        ${s.known ? `<span class="pill ${s.free ? "free" : "busy"}">${s.free}/${s.total} free</span>` : ""}
+        ${s.price ? `<span class="pill price">${esc(s.price)}</span>` : ""}</div></div>`).join("")
+    : `<div class="empty">No stations match these filters.</div>`;
+  $("list").querySelectorAll(".item").forEach(el => {
+    const go = () => { const s = top[+el.dataset.i]; map.flyTo([s.lat, s.lon], Math.max(map.getZoom(), 15)); s.marker.openPopup(); $("map").scrollIntoView({behavior:"smooth", block:"center"}); };
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  });
+}
+
+let current = [];
+function render(){ current = visible(); drawMap(current); drawList(current); renderMeta(); }
+function renderMeta(){
+  const t = d => d ? d.toLocaleString("de-CH", {dateStyle:"short", timeStyle:"short"}) : "–";
+  $("metaLine").textContent = `Station data ${t(fetchedAt)} · live status ${statusAt ? t(statusAt) : "unavailable"}`;
+}
+
+function chips(el, opts, key, fmt){
+  el.innerHTML = opts.map(o => `<button class="chip" data-v="${o}" aria-pressed="${prefs[key] == o}">${fmt(o)}</button>`).join("");
+  el.querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    prefs[key] = typeof prefs[key] === "number" ? +b.dataset.v : b.dataset.v;
+    el.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", c === b));
+    savePrefs(); render();
+  });
+}
+function toggles(){
+  for (const k of ["onlyFree", "onlyPrice", "onlyPublic"]){
+    const b = $(k); b.setAttribute("aria-pressed", prefs[k]);
+    b.onclick = () => { prefs[k] = !prefs[k]; b.setAttribute("aria-pressed", prefs[k]); savePrefs(); render(); };
+  }
+}
+function setupControls(){
+  chips($("kwChips"), KW_OPTS, "minKw", v => v ? `≥ ${v} kW` : "Any");
+  chips($("typeChips"), TYPE_OPTS, "type", v => v);
+  const plugs = [...new Set(stations.flatMap(s => [...s.plugs]))].sort();
+  $("plug").innerHTML = `<option value="">Any plug</option>` + plugs.map(p => `<option ${p === prefs.plug ? "selected" : ""}>${esc(p)}</option>`).join("");
+  $("plug").onchange = e => { prefs.plug = e.target.value; savePrefs(); render(); };
+  $("sort").value = prefs.sort;
+  $("sort").onchange = e => { prefs.sort = e.target.value; savePrefs(); drawList(current); };
+  toggles();
+  $("legend").innerHTML = SPEEDS.map(s => `<span><i class="dot" style="background:${css(s.var)}"></i>${s.label}</span>`).join("")
+    + `<span><i class="dot" style="border:2px solid ${css("--busy")}"></i>all occupied</span>`;
+  map.on("moveend", () => { if (!me) drawList(current); });
+}
+
+function showMsg(t){ $("msg").textContent = t; $("msg").hidden = !t; }
+
+function locate(){
+  if (!navigator.geolocation) return showMsg("This browser has no location access.");
+  let first = true;
+  navigator.geolocation.watchPosition(p => {
+    me = {lat: p.coords.latitude, lon: p.coords.longitude};
+    const ll = [me.lat, me.lon];
+    if (!meMarker){
+      meCircle = L.circle(ll, {radius: p.coords.accuracy, color: css("--accent-strong"), weight: 1, fillOpacity: .1}).addTo(map);
+      meMarker = L.circleMarker(ll, {radius: 8, color: "#fff", weight: 3, fillColor: css("--accent-strong"), fillOpacity: 1}).addTo(map).bindTooltip("You");
+    } else { meMarker.setLatLng(ll); meCircle.setLatLng(ll).setRadius(p.coords.accuracy); }
+    if (first){ map.setView(ll, 13); first = false; showMsg(""); }
+    for (const s of current) s.km = haversineKm(me, s);
+    drawList(current);
+  }, e => showMsg(`Location not available (${e.message}). Showing stations around the map centre.`),
+  {enableHighAccuracy: true, maximumAge: 30000, timeout: 20000});
+}
+$("locBtn").onclick = locate;
+
+async function loadStatus(){
+  try {
+    const r = await fetch(STATUS_URL, {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    status = {};
+    for (const op of d.EVSEStatuses) for (const x of op.EVSEStatusRecord) status[x.EvseID] = x.EVSEStatus;
+    statusAt = new Date();
+    render();
+  } catch (e) { renderMeta(); }
+}
+
+(async function init(){
+  try {
+    const r = await fetch("chargers.json");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    stations = d.stations.map(prep);
+    fetchedAt = d.meta.fetchedAt ? new Date(d.meta.fetchedAt) : null;
+  } catch (e) {
+    $("metaLine").textContent = "";
+    return showMsg(`Could not load charger data (${e.message}). Offline and never opened before?`);
+  }
+  setupControls();
+  render();
+  loadStatus();
+  setInterval(() => { if (!document.hidden) loadStatus(); }, 120000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - (statusAt || 0) > 60000) loadStatus(); });
+  locate();
+})();
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
