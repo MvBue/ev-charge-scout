@@ -48,6 +48,10 @@ button,select,input{font:inherit;color:var(--fg)}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:#1B1606;font-weight:600}
 .btn:focus-visible,select:focus-visible,.chip:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.locbar{display:flex;flex-wrap:wrap;gap:6px}
+.locbar input{flex:1 1 200px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.btn[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+#map.picking{cursor:crosshair}
 select{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
 .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px}
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -89,8 +93,13 @@ select{background:var(--surface);border:1px solid var(--line);border-radius:6px;
       <h1>EV Charge Scout</h1>
       <div class="meta" id="metaLine">Loading chargers…</div>
     </div>
-    <button class="btn primary" id="locBtn">Locate me</button>
   </header>
+  <form class="locbar" id="locForm" role="search">
+    <input type="search" id="place" placeholder="Town, address or postcode" aria-label="Search a location">
+    <button class="btn" type="submit">Go</button>
+    <button class="btn" type="button" id="pickBtn" aria-pressed="false">Pick on map</button>
+    <button class="btn primary" type="button" id="locBtn">Use GPS</button>
+  </form>
   <div class="banner" id="msg" hidden></div>
 
   <section class="controls" aria-label="Filters">
@@ -113,11 +122,15 @@ select{background:var(--surface);border:1px solid var(--line);border-radius:6px;
   </div>
   <div class="list" id="list"></div>
   <p class="note">Distances are straight-line. Range per 10 min assumes full station power and 18 kWh/100 km; most cars charge slower than the station maximum.
-    Data: <a href="https://ich-tanke-strom.ch" target="_blank" rel="noopener">ich-tanke-strom.ch</a> (Swiss Federal Office of Energy). Prices are known for about a quarter of stations.</p>
+    Data: <a href="https://ich-tanke-strom.ch" target="_blank" rel="noopener">ich-tanke-strom.ch</a> (Swiss Federal Office of Energy). Outside Switzerland: <a href="https://openchargemap.org" target="_blank" rel="noopener">Open Charge Map</a> (zoom in to load; no live availability, prices rare). Place search: <a href="https://nominatim.openstreetmap.org" target="_blank" rel="noopener">Nominatim</a> / OpenStreetMap. Prices are known for about a quarter of stations.</p>
 </div>
 
 <script>
 const STATUS_URL = "https://data.geo.admin.ch/ch.bfe.ladestellen-elektromobilitaet/status/oicp/ch.bfe.ladestellen-elektromobilitaet.json";
+// Public by design: phones call Open Charge Map directly, so a secret could not hide it.
+const OCM_KEY = "d35b3d27-a35e-4c59-97b2-9d651f7e8704", OCM_MIN_ZOOM = 9, OCM_MAX = 1000, OCM_CH = 217;
+const OCM_PLUGS = {1:"Type 1", 2:"CHAdeMO", 25:"Type 2", 1036:"Type 2 cable", 27:"Tesla", 30:"Tesla", 32:"CCS1", 33:"CCS", 28:"Schuko", 1037:"Type 13"};
+const OCM_PRIVATE = new Set([2, 3, 6]), OCM_DEAD = new Set([100, 150, 200, 210]);
 const PREF_KEY = "ecs-prefs-v1", LIST_MAX = 40, KWH_PER_KM = 0.18;
 const ls = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}} };
 const $ = id => document.getElementById(id);
@@ -138,12 +151,12 @@ const prefs = Object.assign({minKw:0, type:"All", plug:"", onlyFree:false, onlyP
   JSON.parse(ls.get(PREF_KEY) || "{}"));
 const savePrefs = () => ls.set(PREF_KEY, JSON.stringify(prefs));
 
-let stations = [], status = {}, statusAt = null, me = null, fetchedAt = null;
+let stations = [], ocmSeen = new Set(), ocmState = "", status = {}, statusAt = null, me = null, fetchedAt = null;
 const map = L.map("map", {preferCanvas:true, zoomControl:true}).setView([46.8, 8.23], 8);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19,
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
 const layer = L.layerGroup().addTo(map);
-let meMarker = null, meCircle = null;
+let meMarker = null, meCircle = null, watchId = null, picking = false;
 
 function haversineKm(a, b){
   const R = 6371, r = x => x * Math.PI / 180;
@@ -159,7 +172,7 @@ function prep(s){
   s.maxKw = Math.max(0, ...s.points.map(p => p.kw || 0));
   s.types = new Set(s.points.map(p => p.type));
   s.plugs = new Set(s.points.map(p => p.plug));
-  s.public = !/restricted|test/i.test(s.access || "");
+  s.public = s.publicOverride ?? !/restricted|test/i.test(s.access || "");
   s.kwhPrice = priceKwh(s.price);
   return s;
 }
@@ -225,9 +238,9 @@ function drawList(list){
     price: (a, b) => (a.kwhPrice ?? 1e9) - (b.kwhPrice ?? 1e9) || a.sortKm - b.sortKm,
   }[prefs.sort];
   const top = near.sort(by).slice(0, LIST_MAX);
-  $("count").textContent = `${list.length.toLocaleString("de-CH")} stations match · list shows ${top.length} closest to ${me ? "you" : "map centre"}`;
+  $("count").textContent = `${list.length.toLocaleString("de-CH")} stations match · list shows ${top.length} closest to ${me ? "your location" : "map centre"}`;
   $("list").innerHTML = top.length ? top.map((s, i) => `<div class="item" tabindex="0" data-i="${i}">
-      <div><div class="name">${esc(s.name || s.addr)}</div><div class="sub">${esc(s.op)} · ${esc(s.addr)}</div></div>
+      <div><div class="name">${esc(s.name || s.addr)}</div><div class="sub">${[s.op, s.addr].filter(Boolean).map(esc).join(" · ")}</div></div>
       <div class="dist">${fmtDist(s.sortKm)}</div>
       <div class="facts">${s.shown.map(p => {
         const sp = speedOf(p.kw);
@@ -246,7 +259,7 @@ let current = [];
 function render(){ current = visible(); drawMap(current); drawList(current); renderMeta(); }
 function renderMeta(){
   const t = d => d ? d.toLocaleString("de-CH", {dateStyle:"short", timeStyle:"short"}) : "–";
-  $("metaLine").textContent = `Station data ${t(fetchedAt)} · live status ${statusAt ? t(statusAt) : "unavailable"}`;
+  $("metaLine").textContent = `CH data ${t(fetchedAt)} · live status ${statusAt ? t(statusAt) : "unavailable"}${ocmState ? " · Europe: " + ocmState : ""}`;
 }
 
 function chips(el, opts, key, fmt){
@@ -266,36 +279,107 @@ function toggles(){
 function setupControls(){
   chips($("kwChips"), KW_OPTS, "minKw", v => v ? `≥ ${v} kW` : "Any");
   chips($("typeChips"), TYPE_OPTS, "type", v => v);
-  const plugs = [...new Set(stations.flatMap(s => [...s.plugs]))].sort();
-  $("plug").innerHTML = `<option value="">Any plug</option>` + plugs.map(p => `<option ${p === prefs.plug ? "selected" : ""}>${esc(p)}</option>`).join("");
+  fillPlugs();
   $("plug").onchange = e => { prefs.plug = e.target.value; savePrefs(); render(); };
   $("sort").value = prefs.sort;
   $("sort").onchange = e => { prefs.sort = e.target.value; savePrefs(); drawList(current); };
   toggles();
   $("legend").innerHTML = SPEEDS.map(s => `<span><i class="dot" style="background:${css(s.var)}"></i>${s.label}</span>`).join("")
     + `<span><i class="dot" style="border:2px solid ${css("--busy")}"></i>all occupied</span>`;
-  map.on("moveend", () => { if (!me) drawList(current); });
+  let t = null;
+  map.on("moveend", () => { if (!me) drawList(current); clearTimeout(t); t = setTimeout(loadOcm, 600); });
 }
 
 function showMsg(t){ $("msg").textContent = t; $("msg").hidden = !t; }
 
+function setMe(lat, lon, accuracy, label, fly){
+  me = {lat, lon};
+  const ll = [lat, lon];
+  if (!meMarker){
+    meCircle = L.circle(ll, {radius: accuracy || 0, color: css("--accent-strong"), weight: 1, fillOpacity: .1}).addTo(map);
+    meMarker = L.circleMarker(ll, {radius: 8, color: "#fff", weight: 3, fillColor: css("--accent-strong"), fillOpacity: 1}).addTo(map);
+  } else { meMarker.setLatLng(ll); meCircle.setLatLng(ll).setRadius(accuracy || 0); }
+  meMarker.unbindTooltip().bindTooltip(label);
+  if (fly) map.setView(ll, Math.max(map.getZoom(), 13));
+  for (const s of current) s.km = haversineKm(me, s);
+  drawList(current);
+}
+function stopGps(){ if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null; }
+function setPicking(on){ picking = on; $("pickBtn").setAttribute("aria-pressed", on); $("map").classList.toggle("picking", on); }
+
 function locate(){
-  if (!navigator.geolocation) return showMsg("This browser has no location access.");
+  if (!navigator.geolocation) return showMsg("This browser has no location access. Search a place or pick it on the map.");
+  stopGps(); setPicking(false);
   let first = true;
-  navigator.geolocation.watchPosition(p => {
-    me = {lat: p.coords.latitude, lon: p.coords.longitude};
-    const ll = [me.lat, me.lon];
-    if (!meMarker){
-      meCircle = L.circle(ll, {radius: p.coords.accuracy, color: css("--accent-strong"), weight: 1, fillOpacity: .1}).addTo(map);
-      meMarker = L.circleMarker(ll, {radius: 8, color: "#fff", weight: 3, fillColor: css("--accent-strong"), fillOpacity: 1}).addTo(map).bindTooltip("You");
-    } else { meMarker.setLatLng(ll); meCircle.setLatLng(ll).setRadius(p.coords.accuracy); }
-    if (first){ map.setView(ll, 13); first = false; showMsg(""); }
-    for (const s of current) s.km = haversineKm(me, s);
-    drawList(current);
-  }, e => showMsg(`Location not available (${e.message}). Showing stations around the map centre.`),
+  watchId = navigator.geolocation.watchPosition(p => {
+    setMe(p.coords.latitude, p.coords.longitude, p.coords.accuracy, "You (GPS)", first);
+    if (first){ first = false; showMsg(""); }
+  }, e => showMsg(`Location not available (${e.message}). Search a place or pick it on the map.`),
   {enableHighAccuracy: true, maximumAge: 30000, timeout: 20000});
 }
 $("locBtn").onclick = locate;
+$("pickBtn").onclick = () => setPicking(!picking);
+map.on("click", e => {
+  if (!picking) return;
+  stopGps(); setPicking(false); showMsg("");
+  setMe(e.latlng.lat, e.latlng.lng, 0, "Chosen location", false);
+});
+$("locForm").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("place").value.trim();
+  if (!q) return;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`);
+    const [hit] = await r.json();
+    if (!hit) return showMsg(`No place found for "${q}".`);
+    stopGps(); setPicking(false); showMsg("");
+    setMe(+hit.lat, +hit.lon, 0, hit.display_name, true);
+  } catch (err) { showMsg(`Search failed (${err.message}).`); }
+};
+
+function fillPlugs(){
+  const plugs = [...new Set(stations.flatMap(s => [...s.plugs]))].sort();
+  $("plug").innerHTML = `<option value="">Any plug</option>` + plugs.map(p => `<option ${p === prefs.plug ? "selected" : ""}>${esc(p)}</option>`).join("");
+}
+
+function fromOcm(x){
+  const a = x.AddressInfo, points = new Map();
+  for (const c of x.Connections || []){
+    if (OCM_DEAD.has(c.StatusTypeID)) continue;
+    const plug = OCM_PLUGS[c.ConnectionTypeID] || c.ConnectionType?.Title?.trim() || "?";
+    const type = c.CurrentTypeID === 30 || (!c.CurrentTypeID && /CCS|CHAdeMO/.test(plug)) ? "DC" : "AC";
+    const key = `${c.PowerKW}|${type}|${plug}`;
+    if (!points.has(key)) points.set(key, {kw: c.PowerKW || null, type, plug, ids: []});
+    for (let i = 0; i < (c.Quantity || 1); i++) points.get(key).ids.push(`ocm:${c.ID}:${i}`);
+  }
+  return {
+    lat: a.Latitude, lon: a.Longitude, name: a.Title, op: x.OperatorInfo?.Title || "",
+    addr: [a.AddressLine1, [a.Postcode, a.Town].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+    access: x.UsageType?.Title || "", open24: null, price: x.UsageCost || null, ocm: true,
+    publicOverride: !OCM_PRIVATE.has(x.UsageTypeID), points: [...points.values()],
+  };
+}
+
+let ocmBusy = false;
+async function loadOcm(){
+  if (map.getZoom() < OCM_MIN_ZOOM){ ocmState = "zoom in to load"; return renderMeta(); }
+  if (ocmBusy) return;
+  ocmBusy = true;
+  const b = map.getBounds();
+  const url = `https://api.openchargemap.io/v3/poi?output=json&compact=false&verbose=false&maxresults=${OCM_MAX}`
+    + `&boundingbox=(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})&key=${OCM_KEY}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const added = (await r.json())
+      .filter(x => x.AddressInfo?.CountryID !== OCM_CH && !OCM_DEAD.has(x.StatusTypeID) && !ocmSeen.has(x.ID))
+      .map(x => { ocmSeen.add(x.ID); return prep(fromOcm(x)); })
+      .filter(s => s.points.length);
+    ocmState = "Open Charge Map";
+    if (added.length){ stations.push(...added); fillPlugs(); render(); } else renderMeta();
+  } catch (e) { ocmState = `failed (${e.message})`; renderMeta(); }
+  ocmBusy = false;
+}
 
 async function loadStatus(){
   try {
